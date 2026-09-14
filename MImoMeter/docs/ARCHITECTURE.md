@@ -28,6 +28,7 @@ Timer / 手动刷新 / 从睡眠唤醒
 | `PlatformUsageClient.swift` | SSO + 平台用量 |
 | `JSONHTTPClient.swift` | URLSession 封装（10s 超时） |
 | `AppState.swift` | 双通道回落、轮询退避、stale、token 缓存 |
+| `TaskStatus.swift` | 本地桥 sessions/messages 推断任务态；提示线 15s 轮询 |
 | `StatusItem*` / `SettingsController` / `LaunchAtLogin` | 菜单栏 UI、设置、登录项 |
 | `SelfTests.swift` | 进程内自测（CLT 无 XCTest 时可用） |
 
@@ -52,3 +53,4 @@ MiMo terminate 通知 → stopMeter() → idle 壳
 - UI **永不**直接发 HTTP
 - 错误先入 `AppState`，再变成 `MenuBarDisplayState`
 - 桥失败不展示；仅平台失败才显示中文原因
+- 提示线任务状态：`TaskStatusMonitor` 轮询本地桥，与额度刷新解耦；桥不可达 → 空闲橙

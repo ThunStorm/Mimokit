@@ -9,13 +9,15 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     private let state: AppState
     private let mode: Mode
+    private let taskStatus: TaskStatusMonitor?
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let contentView = StatusItemView()
     private let menu = NSMenu()
 
-    init(state: AppState, mode: Mode = .live) {
+    init(state: AppState, mode: Mode = .live, taskStatus: TaskStatusMonitor? = nil) {
         self.state = state
         self.mode = mode
+        self.taskStatus = taskStatus
         super.init()
         guard let button = statusItem.button else { return }
         button.title = ""
@@ -32,6 +34,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.delegate = self
         statusItem.menu = menu
         state.onChange = { [weak self] in
+            Task { @MainActor in
+                self?.updateView()
+            }
+        }
+        taskStatus?.onChange = { [weak self] in
             Task { @MainActor in
                 self?.updateView()
             }
@@ -60,13 +67,32 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     func updateView() {
         let display = state.display
+        let task = resolvedTaskStatus
+        let underlineOn = UserDefaults.standard.bool(forKey: "showPercentUnderline")
+        let label = "\(display.accessibilityLabel)，任务\(task.userLabel)"
         contentView.update(
             percentage: display.percentageText,
             color: statusColor(for: display.remainingPercent),
-            accessibilityLabel: display.accessibilityLabel,
-            showsUnderline: UserDefaults.standard.bool(forKey: "showPercentUnderline")
+            accessibilityLabel: label,
+            showsUnderline: underlineOn,
+            underlineColor: underlineOn ? underlineColor(for: task) : nil
         )
-        statusItem.button?.toolTip = display.tooltip
+        statusItem.button?.toolTip = label
+    }
+
+    private var resolvedTaskStatus: UnderlineTaskStatus {
+        if mode == .idle { return .idle }
+        return taskStatus?.status ?? .idle
+    }
+
+    private func underlineColor(for status: UnderlineTaskStatus) -> NSColor {
+        switch status {
+        case .idle: return StatusItemView.meterOrange
+        case .running: return StatusItemView.taskYellow
+        case .recentSuccess: return StatusItemView.taskGreen
+        case .needsAttention: return StatusItemView.taskRed
+        case .unknown: return StatusItemView.taskGray
+        }
     }
 
     private func rebuildMenu() {

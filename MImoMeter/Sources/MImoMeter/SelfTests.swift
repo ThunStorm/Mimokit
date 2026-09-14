@@ -119,6 +119,15 @@ enum SelfTests {
             expectThrows({ _ = try DesktopAPIConfigParser.parse(data: Data("not-json".utf8)) }, "bad json")
             let portOnly = try DesktopAPIConfigParser.parse(data: Data(#"{"port":9000,"token":"t"}"#.utf8))
             expect(portOnly.baseURL?.absoluteString == "http://127.0.0.1:9000", "port fallback URL")
+            let apiNumber = try DesktopAPIConfigParser.parse(
+                data: Data(#"{"api":1,"port":61873,"token":"tok","pid":4300}"#.utf8)
+            )
+            expect(apiNumber.baseURL?.absoluteString == "http://127.0.0.1:61873", "api as number uses port")
+            expect(apiNumber.token == "tok", "api number token kept")
+            let apiURL = try DesktopAPIConfigParser.parse(
+                data: Data(#"{"api":"http://127.0.0.1:19347","port":19347,"token":"tok"}"#.utf8)
+            )
+            expect(apiURL.baseURL?.absoluteString == "http://127.0.0.1:19347", "api as URL string")
         }
 
         runSuite("SSO") {
@@ -166,6 +175,165 @@ enum SelfTests {
             state.markStaleIfNeeded(now: Date(timeIntervalSince1970: 1_700_000_000 + 301))
             expect(state.usage == .stale, "stale after 5min")
             expect(state.display.percentageText == "--%", "stale shows --%")
+        }
+
+        runSuite("TaskStatus") {
+            let now = Date(timeIntervalSince1970: 1_700_000_000)
+
+            expect(TaskStatusResolver.resolve(sessions: [], now: now) == .idle, "empty sessions idle")
+            expect(
+                TaskStatusResolver.resolve(
+                    sessions: [ResolvedSessionState(id: "a", updated: now, outcome: .idle)],
+                    now: now
+                ) == .idle,
+                "all idle"
+            )
+            expect(
+                TaskStatusResolver.resolve(
+                    sessions: [
+                        ResolvedSessionState(id: "a", updated: now, outcome: .success(at: now)),
+                        ResolvedSessionState(id: "b", updated: now, outcome: .running),
+                    ],
+                    now: now
+                ) == .running,
+                "running beats success"
+            )
+            expect(
+                TaskStatusResolver.resolve(
+                    sessions: [
+                        ResolvedSessionState(id: "a", updated: now, outcome: .running),
+                        ResolvedSessionState(id: "b", updated: now, outcome: .needsAttention),
+                    ],
+                    now: now
+                ) == .needsAttention,
+                "needsAttention beats running"
+            )
+            expect(
+                TaskStatusResolver.resolve(
+                    sessions: [ResolvedSessionState(id: "a", updated: now, outcome: .success(at: now))],
+                    now: now
+                ) == .recentSuccess,
+                "fresh success green"
+            )
+            expect(
+                TaskStatusResolver.resolve(
+                    sessions: [
+                        ResolvedSessionState(
+                            id: "a",
+                            updated: now,
+                            outcome: .success(at: now.addingTimeInterval(-3601))
+                        )
+                    ],
+                    now: now
+                ) == .idle,
+                "success older than 1h is idle"
+            )
+            expect(
+                TaskStatusResolver.resolve(
+                    sessions: [ResolvedSessionState(id: "a", updated: now, outcome: .unknown)],
+                    now: now
+                ) == .unknown,
+                "unknown stays gray"
+            )
+
+            let runningMessages = [
+                BridgeMessage(
+                    info: .init(role: "assistant", time: .init(created: 1, completed: nil)),
+                    parts: [
+                        .init(type: "tool", reason: nil, state: .init(status: "running", hasMetadata: true))
+                    ]
+                )
+            ]
+            expect(
+                TaskStatusResolver.outcome(fromMessages: runningMessages, now: now) == .running,
+                "running tool → running"
+            )
+
+            let permissionMessages = [
+                BridgeMessage(
+                    info: .init(role: "assistant", time: .init(created: 1, completed: nil)),
+                    parts: [
+                        .init(type: "tool", reason: nil, state: .init(status: "running", hasMetadata: false, hasRaw: true))
+                    ]
+                )
+            ]
+            expect(
+                TaskStatusResolver.outcome(fromMessages: permissionMessages, now: now) == .needsAttention,
+                "running without metadata (permission wait) → needsAttention"
+            )
+
+            let successMessages = [
+                BridgeMessage(
+                    info: .init(role: "assistant", time: .init(created: 1, completed: 1_700_000_000_000)),
+                    parts: [
+                        .init(type: "tool", reason: nil, state: .init(status: "completed")),
+                        .init(type: "step-finish", reason: "stop", state: nil),
+                    ]
+                )
+            ]
+            expect(
+                TaskStatusResolver.outcome(fromMessages: successMessages, now: now) == .success(at: now),
+                "stop → success"
+            )
+
+            let pendingMessages = [
+                BridgeMessage(
+                    info: .init(role: "assistant", time: .init(created: 1, completed: nil)),
+                    parts: [
+                        .init(type: "tool", reason: nil, state: .init(status: "pending"))
+                    ]
+                )
+            ]
+            expect(
+                TaskStatusResolver.outcome(fromMessages: pendingMessages, now: now) == .needsAttention,
+                "pending tool → needsAttention"
+            )
+
+            let errorAbortMessages = [
+                BridgeMessage(
+                    info: .init(role: "assistant", time: .init(created: 1, completed: 2_000)),
+                    parts: [
+                        .init(type: "tool", reason: nil, state: .init(status: "error")),
+                        .init(type: "step-finish", reason: "aborted", state: nil),
+                    ]
+                )
+            ]
+            expect(
+                TaskStatusResolver.outcome(fromMessages: errorAbortMessages, now: now) == .needsAttention,
+                "error+abort → needsAttention"
+            )
+
+            let userLast = [
+                BridgeMessage(
+                    info: .init(role: "user", time: .init(created: 1, completed: nil)),
+                    parts: [
+                        .init(type: "text", reason: nil, state: nil)
+                    ]
+                )
+            ]
+            expect(
+                TaskStatusResolver.outcome(fromMessages: userLast, now: now) == .running,
+                "user last → running"
+            )
+
+            expect(TaskStatusResolver.shouldInspect(updated: now, now: now), "inspect fresh session")
+            expect(
+                !TaskStatusResolver.shouldInspect(updated: now.addingTimeInterval(-7201), now: now),
+                "skip old session"
+            )
+
+            let url = TaskStatusClient.makeURL(
+                base: URL(string: "http://127.0.0.1:9")!,
+                path: "v1/sessions",
+                query: "limit=20"
+            )
+            expect(url?.absoluteString == "http://127.0.0.1:9/v1/sessions?limit=20", "URL with query")
+            let msgURL = TaskStatusClient.makeURL(
+                base: URL(string: "http://127.0.0.1:9")!,
+                path: "v1/sessions/ses_1/messages",
+                query: nil
+            )
+            expect(msgURL?.absoluteString == "http://127.0.0.1:9/v1/sessions/ses_1/messages", "URL path")
         }
 
         print("")

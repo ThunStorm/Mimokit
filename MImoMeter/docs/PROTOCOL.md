@@ -107,8 +107,32 @@ Accept: application/json
 顶层单对象且无 kind/duration → **强制 `weekly`**。  
 多窗口时：`kindHint` 优先，其次 `windowDurationMins`（240–360 fiveHour / 9000–11000 weekly / 38000–50000 monthly）。
 
-## 5. 展示
+## 5. 任务状态（提示线，通道 A）
+
+```http
+GET {api}/v1/sessions?limit=20
+Authorization: Bearer {token}
+
+GET {api}/v1/sessions/{id}/messages
+Authorization: Bearer {token}
+```
+
+推断规则（取最近 2h 内更新的 session 的最后一条 message）：
+
+| 信号 | 映射 |
+| --- | --- |
+| tool `state.status == pending` | 需要处理（红） |
+| assistant 且 `time.completed` 空，或存在 running tool / `step-finish reason=tool-calls` | 运行中（黄） |
+| assistant 完成且 `step-finish reason=stop`，完成时间 ≤ 1h | 最近完成（绿） |
+| 完成但 reason 非 stop 且含 error tool | 需要处理（红） |
+| 桥不可达 / 无相关 session | 空闲（橙） |
+| 无法解析 / 未知 reason | 状态未知（灰） |
+
+多 session 优先级：红 > 黄 > 绿 > 灰 > 橙。轮询 15s，仅本地桥。
+
+## 6. 展示
 
 - 状态栏：`62%` 或 `--%`；可选 `W ` 前缀
 - 菜单：每周剩余、重置时间、更新时间、打开 MiMo、刷新、设置、退出
 - **不伪造 5h 窗口**；服务端未返回则不渲染
+- 提示线（可选）：按任务状态着色，见第 5 节

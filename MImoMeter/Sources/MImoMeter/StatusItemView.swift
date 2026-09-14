@@ -6,7 +6,11 @@ final class StatusItemView: NSView {
     private var underlineWidth: NSLayoutConstraint?
     private var percentCenterY: NSLayoutConstraint?
     private var percentTopY: NSLayoutConstraint?
-    private static let meterOrange = NSColor(srgbRed: 1.0, green: 120.0 / 255.0, blue: 20.0 / 255.0, alpha: 1)
+    static let meterOrange = NSColor(srgbRed: 1.0, green: 120.0 / 255.0, blue: 20.0 / 255.0, alpha: 1)
+    static let taskYellow = NSColor(srgbRed: 1.0, green: 0.78, blue: 0.0, alpha: 1)
+    static let taskGreen = NSColor(srgbRed: 0.2, green: 0.75, blue: 0.25, alpha: 1)
+    static let taskRed = NSColor(srgbRed: 0.95, green: 0.2, blue: 0.18, alpha: 1)
+    static let taskGray = NSColor(srgbRed: 0.55, green: 0.55, blue: 0.55, alpha: 1)
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -61,9 +65,20 @@ final class StatusItemView: NSView {
         percentage.stringValue = "--%"
     }
 
-    func update(percentage text: String, color: NSColor, accessibilityLabel: String, showsUnderline: Bool) {
+    func update(
+        percentage text: String,
+        color: NSColor,
+        accessibilityLabel: String,
+        showsUnderline: Bool,
+        underlineColor: NSColor? = nil
+    ) {
         percentage.stringValue = text
         percentage.textColor = color
+        if let underlineColor {
+            underline.layer?.backgroundColor = underlineColor.cgColor
+        } else {
+            underline.layer?.backgroundColor = Self.meterOrange.cgColor
+        }
         applyUnderlineVisibility(showsUnderline)
         setAccessibilityLabel(accessibilityLabel)
         toolTip = accessibilityLabel

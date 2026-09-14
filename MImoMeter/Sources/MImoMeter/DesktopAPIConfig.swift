@@ -19,7 +19,8 @@ struct DesktopAPIConfig: Equatable, Sendable {
 enum DesktopAPIConfigParser {
     static func parse(data: Data) throws -> DesktopAPIConfig {
         struct Raw: Decodable {
-            let api: String?
+            // MiMo writes `api` as either a version number or a URL string.
+            let api: FlexibleString?
             let port: Int?
             let token: String?
             let pid: Int?
@@ -32,7 +33,7 @@ enum DesktopAPIConfigParser {
         guard let port = raw.port, port > 0, port <= 65_535 else {
             throw UsageError.invalidPayload
         }
-        return DesktopAPIConfig(api: raw.api, port: port, token: token, pid: raw.pid)
+        return DesktopAPIConfig(api: raw.api?.value, port: port, token: token, pid: raw.pid)
     }
 
     static func load(from fileURL: URL, fileManager: FileManager = .default) throws -> DesktopAPIConfig {

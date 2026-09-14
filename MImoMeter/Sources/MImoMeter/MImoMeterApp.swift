@@ -11,6 +11,29 @@ struct MImoMeterApp {
             exit(code)
         }
 
+        if CommandLine.arguments.contains("--task-status-once") {
+            let semaphore = DispatchSemaphore(value: 0)
+            var code: Int32 = 1
+            Task {
+                let result = await TaskStatusClient().fetchStatus()
+                switch result {
+                case .status(let status):
+                    print("TASK_STATUS \(status.rawValue) label=\(status.userLabel)")
+                    code = 0
+                case .bridgeUnavailable:
+                    print("TASK_STATUS bridgeUnavailable")
+                    code = 2
+                }
+                semaphore.signal()
+            }
+            while true {
+                let result = semaphore.wait(timeout: .now() + 0.05)
+                if result == .success { break }
+                RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+            }
+            exit(code)
+        }
+
         if CommandLine.arguments.contains("--fetch-once") {
             let semaphore = DispatchSemaphore(value: 0)
             var code: Int32 = 1
@@ -61,6 +84,7 @@ enum FetchOnce {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var state: AppState?
     private var statusItemController: StatusItemController?
+    private var taskStatusMonitor: TaskStatusMonitor?
     private var wakeObserver: NSObjectProtocol?
     private var mimoLaunchObserver: NSObjectProtocol?
     private var mimoTerminateObserver: NSObjectProtocol?
@@ -101,6 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         tearDownObservers()
         state?.stop()
+        taskStatusMonitor?.stop()
         idleState?.stop()
     }
 
@@ -144,7 +169,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let state = AppState()
         self.state = state
-        statusItemController = StatusItemController(state: state, mode: .live)
+        let monitor = TaskStatusMonitor()
+        self.taskStatusMonitor = monitor
+        statusItemController = StatusItemController(state: state, mode: .live, taskStatus: monitor)
 
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification,
@@ -157,6 +184,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         state.start()
+        monitor.start()
     }
 
     private func stopMeter() {
@@ -170,6 +198,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         wakeObserver = nil
         state?.stop()
+        taskStatusMonitor?.stop()
+        taskStatusMonitor = nil
         state = nil
         statusItemController = nil
         startIdleShell()
