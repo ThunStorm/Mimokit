@@ -19,7 +19,7 @@ struct DesktopAPIConfig: Equatable, Sendable {
 enum DesktopAPIConfigParser {
     static func parse(data: Data) throws -> DesktopAPIConfig {
         struct Raw: Decodable {
-            // MiMo writes `api` as either a version number or a URL string.
+            // MiMo may write `api` as a version number instead of a URL string.
             let api: FlexibleString?
             let port: Int?
             let token: String?

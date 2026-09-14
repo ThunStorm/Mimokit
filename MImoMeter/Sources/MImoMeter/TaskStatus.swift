@@ -19,7 +19,6 @@ enum UnderlineTaskStatus: String, Sendable, Equatable {
     }
 }
 
-/// Terminal/active outcome of one session's latest message.
 enum SessionTaskOutcome: Sendable, Equatable {
     case running
     case success(at: Date)
@@ -28,16 +27,8 @@ enum SessionTaskOutcome: Sendable, Equatable {
     case idle
 }
 
-struct ResolvedSessionState: Sendable, Equatable {
-    let id: String
-    let updated: Date?
-    let outcome: SessionTaskOutcome
-}
-
 enum TaskStatusResolver {
-    /// Green only if success is within this window.
     static let recentSuccessWindow: TimeInterval = 3600
-    /// Skip fetching messages for sessions older than this.
     static let sessionLookback: TimeInterval = 7200
 
     static func shouldInspect(updated: Date?, now: Date) -> Bool {
@@ -45,16 +36,16 @@ enum TaskStatusResolver {
         return now.timeIntervalSince(updated) <= sessionLookback
     }
 
-    /// Aggregate across sessions: needsAttention > running > recentSuccess > unknown > idle.
-    static func resolve(sessions: [ResolvedSessionState], now: Date) -> UnderlineTaskStatus {
-        guard !sessions.isEmpty else { return .idle }
+    /// needsAttention > running > recentSuccess > unknown > idle
+    static func resolve(outcomes: [SessionTaskOutcome], now: Date) -> UnderlineTaskStatus {
+        guard !outcomes.isEmpty else { return .idle }
 
         var hasRunning = false
         var hasSuccess = false
         var hasUnknown = false
 
-        for session in sessions {
-            switch session.outcome {
+        for outcome in outcomes {
+            switch outcome {
             case .needsAttention:
                 return .needsAttention
             case .running:
@@ -76,7 +67,7 @@ enum TaskStatusResolver {
         return .idle
     }
 
-    static func outcome(fromMessages messages: [BridgeMessage], now: Date) -> SessionTaskOutcome {
+    static func outcome(fromMessages messages: [BridgeMessage]) -> SessionTaskOutcome {
         guard let last = messages.last else { return .idle }
         let info = last.info
         let parts = last.parts ?? []
@@ -85,7 +76,7 @@ enum TaskStatusResolver {
         if tools.contains(where: { $0.state?.status == "pending" }) {
             return .needsAttention
         }
-        // Permission dialog: tool stays "running" with a raw buffer and no metadata.
+        // Permission dialog: tool stays "running" with no metadata.
         if tools.contains(where: { $0.state?.status == "running" && $0.state?.hasMetadata == false }) {
             return .needsAttention
         }
@@ -97,9 +88,7 @@ enum TaskStatusResolver {
         if role == "assistant", completedMs == nil {
             return .running
         }
-
         if role == "user" {
-            // User sent; agent has not produced a reply yet.
             return .running
         }
 
@@ -115,14 +104,10 @@ enum TaskStatusResolver {
             if reason == "stop" {
                 return .success(at: completedAt)
             }
-            if hasErrorTool {
+            if hasErrorTool || reason != nil {
                 return .needsAttention
             }
-            if reason == nil {
-                return .unknown
-            }
-            // Aborted / other terminal reasons.
-            return .needsAttention
+            return .unknown
         }
 
         return .unknown
@@ -133,10 +118,9 @@ enum TaskStatusResolver {
 
 struct BridgeSession: Decodable, Sendable, Equatable {
     let id: String
-    let time: BridgeTime?
+    let time: Time?
 
-    struct BridgeTime: Decodable, Sendable, Equatable {
-        let created: Int?
+    struct Time: Decodable, Sendable, Equatable {
         let updated: Int?
     }
 
@@ -155,7 +139,6 @@ struct BridgeMessage: Decodable, Sendable, Equatable {
         let time: Time?
 
         struct Time: Decodable, Sendable, Equatable {
-            let created: Int?
             let completed: Int?
         }
     }
@@ -167,27 +150,22 @@ struct BridgeMessage: Decodable, Sendable, Equatable {
 
         struct ToolState: Decodable, Sendable, Equatable {
             let status: String?
-            /// Present once the tool has actually started executing (not while waiting on a permission dialog).
             let hasMetadata: Bool
-            let hasRaw: Bool
 
             enum CodingKeys: String, CodingKey {
                 case status
                 case metadata
-                case raw
             }
 
-            init(status: String? = nil, hasMetadata: Bool = false, hasRaw: Bool = false) {
+            init(status: String? = nil, hasMetadata: Bool = false) {
                 self.status = status
                 self.hasMetadata = hasMetadata
-                self.hasRaw = hasRaw
             }
 
             init(from decoder: Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
                 status = try container.decodeIfPresent(String.self, forKey: .status)
                 hasMetadata = container.contains(.metadata)
-                hasRaw = container.contains(.raw)
             }
         }
     }
@@ -203,7 +181,6 @@ enum TaskStatusFetchResult: Sendable, Equatable {
 struct TaskStatusClient: Sendable {
     let http: any HTTPPerforming
     let configLoader: @Sendable () throws -> DesktopAPIConfig
-    let clock: @Sendable () -> Date
 
     init(
         http: any HTTPPerforming = URLSessionHTTPClient(),
@@ -212,12 +189,10 @@ struct TaskStatusClient: Sendable {
                 throw UsageError.bridgeUnavailable
             }
             return try DesktopAPIConfigParser.load(from: url)
-        },
-        clock: @escaping @Sendable () -> Date = { Date() }
+        }
     ) {
         self.http = http
         self.configLoader = configLoader
-        self.clock = clock
     }
 
     func fetchStatus() async -> TaskStatusFetchResult {
@@ -231,7 +206,7 @@ struct TaskStatusClient: Sendable {
             return .bridgeUnavailable
         }
 
-        let now = clock()
+        let now = Date()
         let sessionsResult = await sendJSON(
             [BridgeSession].self,
             base: base,
@@ -243,11 +218,9 @@ struct TaskStatusClient: Sendable {
             return .bridgeUnavailable
         }
 
-        var resolved: [ResolvedSessionState] = []
+        var outcomes: [SessionTaskOutcome] = []
         for session in sessions {
-            let inspect = TaskStatusResolver.shouldInspect(updated: session.updatedDate, now: now)
-            let outcome: SessionTaskOutcome
-            if inspect {
+            if TaskStatusResolver.shouldInspect(updated: session.updatedDate, now: now) {
                 let messagesResult = await sendJSON(
                     [BridgeMessage].self,
                     base: base,
@@ -257,17 +230,16 @@ struct TaskStatusClient: Sendable {
                 )
                 switch messagesResult {
                 case .success(let messages):
-                    outcome = TaskStatusResolver.outcome(fromMessages: messages, now: now)
+                    outcomes.append(TaskStatusResolver.outcome(fromMessages: messages))
                 case .failure:
-                    outcome = .unknown
+                    outcomes.append(.unknown)
                 }
             } else {
-                outcome = .idle
+                outcomes.append(.idle)
             }
-            resolved.append(ResolvedSessionState(id: session.id, updated: session.updatedDate, outcome: outcome))
         }
 
-        return .status(TaskStatusResolver.resolve(sessions: resolved, now: now))
+        return .status(TaskStatusResolver.resolve(outcomes: outcomes, now: now))
     }
 
     private enum DecodeResult<T: Decodable & Sendable>: Sendable {
@@ -293,8 +265,7 @@ struct TaskStatusClient: Sendable {
         do {
             let (data, response) = try await http.send(request)
             guard response.statusCode == 200 else { return .failure }
-            let decoded = try JSONDecoder().decode(T.self, from: data)
-            return .success(decoded)
+            return .success(try JSONDecoder().decode(T.self, from: data))
         } catch {
             return .failure
         }
@@ -322,10 +293,7 @@ final class TaskStatusMonitor {
     private let client: TaskStatusClient
     private let pollInterval: TimeInterval
 
-    init(
-        client: TaskStatusClient = TaskStatusClient(),
-        pollInterval: TimeInterval = 15
-    ) {
+    init(client: TaskStatusClient = TaskStatusClient(), pollInterval: TimeInterval = 15) {
         self.client = client
         self.pollInterval = pollInterval
     }
