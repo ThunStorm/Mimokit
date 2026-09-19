@@ -77,6 +77,16 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             showsUnderline: underlineOn,
             underlineColor: underlineOn ? underlineColor(for: task) : nil
         )
+        // NSStatusItem does not reliably shrink when a custom subview's text
+        // gets narrower (e.g. 100% → 99%); pin length to the measured width.
+        contentView.invalidateIntrinsicContentSize()
+        let measured = contentView.intrinsicContentSize.width
+        if measured > 0 {
+            statusItem.length = measured
+        } else {
+            statusItem.length = NSStatusItem.variableLength
+        }
+        statusItem.button?.layoutSubtreeIfNeeded()
         statusItem.button?.toolTip = label
     }
 

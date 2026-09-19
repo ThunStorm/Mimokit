@@ -196,10 +196,17 @@ enum SelfTests {
             )
             expect(
                 TaskStatusResolver.resolve(
-                    outcomes: [.success(at: now.addingTimeInterval(-3601))],
+                    outcomes: [.success(at: now.addingTimeInterval(-599))],
+                    now: now
+                ) == .recentSuccess,
+                "success within 10min is green"
+            )
+            expect(
+                TaskStatusResolver.resolve(
+                    outcomes: [.success(at: now.addingTimeInterval(-601))],
                     now: now
                 ) == .idle,
-                "success older than 1h is idle"
+                "success older than 10min is idle"
             )
             expect(TaskStatusResolver.resolve(outcomes: [.unknown], now: now) == .unknown, "unknown stays gray")
 

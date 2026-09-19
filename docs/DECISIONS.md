@@ -32,7 +32,10 @@
 ## 2026-09-14
 
 10. **提示线着色表示「项目任务状态」，不是额度取数状态**  
-    语义：红=需要处理，黄=运行中，绿=1h 内成功完成，灰=未知异常，橙=空闲。
+    语义：红=需要处理，黄=运行中，绿=10min 内成功完成，灰=未知异常，橙=空闲。（窗口 1h → 30min → 10min，过期回落橙）
+
+13. **提示线短线与示数宽度对齐；成功态 10 分钟回落空闲**  
+    `100%`→`99%` 时 NSStatusItem 不自动收窄会导致短线偏移：label 改为按字宽居中、短线等宽，并按测量宽度重设 `statusItem.length`。`recentSuccessWindow` 定为 600s。
 
 11. **任务态来源：本地桥 sessions + messages 推断**  
     无 session 级 status；SSE 有 permission 事件但不补发。权限等待 = tool `running` 且无 `metadata`（有 `raw`）。

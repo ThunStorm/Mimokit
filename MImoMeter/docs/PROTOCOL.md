@@ -123,7 +123,7 @@ Authorization: Bearer {token}
 | --- | --- |
 | tool `state.status == pending` | 需要处理（红） |
 | assistant 且 `time.completed` 空，或存在 running tool / `step-finish reason=tool-calls` | 运行中（黄） |
-| assistant 完成且 `step-finish reason=stop`，完成时间 ≤ 1h | 最近完成（绿） |
+| assistant 完成且 `step-finish reason=stop`，完成时间 ≤ 10min | 最近完成（绿） |
 | 完成但 reason 非 stop 且含 error tool | 需要处理（红） |
 | 桥不可达 / 无相关 session | 空闲（橙） |
 | 无法解析 / 未知 reason | 状态未知（灰） |

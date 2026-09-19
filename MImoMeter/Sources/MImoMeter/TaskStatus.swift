@@ -28,7 +28,8 @@ enum SessionTaskOutcome: Sendable, Equatable {
 }
 
 enum TaskStatusResolver {
-    static let recentSuccessWindow: TimeInterval = 3600
+    /// After task completion, stay green for this long, then fall back to orange idle.
+    static let recentSuccessWindow: TimeInterval = 600
     static let sessionLookback: TimeInterval = 7200
 
     static func shouldInspect(updated: Date?, now: Date) -> Bool {
