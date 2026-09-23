@@ -88,6 +88,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var wakeObserver: NSObjectProtocol?
     private var mimoLaunchObserver: NSObjectProtocol?
     private var mimoTerminateObserver: NSObjectProtocol?
+    private var reconcileTimer: Timer?
 
     /// Always-on status item so the user can open settings / quit even when MiMo is closed.
     private var idleController: StatusItemController?
@@ -104,7 +105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] notification in
             guard let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
                   Self.isMimo(application) else { return }
-            Task { @MainActor in self?.startMeter() }
+            Task { @MainActor in self?.apply(MeterLifecycle.afterLaunch(meterActive: self?.state != nil)) }
         }
 
         mimoTerminateObserver = NSWorkspace.shared.notificationCenter.addObserver(
@@ -114,16 +115,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] notification in
             guard let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
                   Self.isMimo(application) else { return }
-            Task { @MainActor in self?.stopMeter() }
+            Task { @MainActor in
+                // In-place update can launch the replacement before the old
+                // process posts terminate. Settle briefly, then re-check.
+                try? await Task.sleep(nanoseconds: 600_000_000)
+                self?.reconcilePresence()
+            }
         }
 
-        if Self.isMimoRunning {
-            startMeter()
+        reconcileTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.reconcilePresence() }
         }
+
+        reconcilePresence()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         tearDownObservers()
+        reconcileTimer?.invalidate()
+        reconcileTimer = nil
         state?.stop()
         taskStatusMonitor?.stop()
         idleState?.stop()
@@ -153,7 +163,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             clock: { Date() }
         ))
         idleState = idle
-        idleController = StatusItemController(state: idle, mode: .idle)
+        idleController = StatusItemController(
+            state: idle,
+            mode: .idle,
+            onCheckMimo: { [weak self] in self?.reconcilePresence() }
+        )
     }
 
     private func stopIdleShell() {
@@ -162,10 +176,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         idleController = nil
     }
 
+    /// Sync meter mode with the real process table (handles update relaunch races).
+    func reconcilePresence() {
+        apply(
+            MeterLifecycle.reconcile(
+                mimoRunning: Self.isMimoRunning,
+                meterActive: state != nil
+            )
+        )
+    }
+
+    private func apply(_ action: MeterLifecycleAction) {
+        switch action {
+        case .none:
+            break
+        case .start:
+            startMeter()
+        case .refresh:
+            state?.refresh()
+        case .stop:
+            stopMeter()
+        }
+    }
+
     private func startMeter() {
         // Tear down idle shell so we don't double status items.
         stopIdleShell()
-        guard state == nil else { return }
+        if state != nil {
+            state?.refresh()
+            return
+        }
 
         let state = AppState()
         self.state = state

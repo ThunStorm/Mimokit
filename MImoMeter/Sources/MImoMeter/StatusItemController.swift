@@ -10,14 +10,21 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let state: AppState
     private let mode: Mode
     private let taskStatus: TaskStatusMonitor?
+    private let onCheckMimo: (() -> Void)?
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let contentView = StatusItemView()
     private let menu = NSMenu()
 
-    init(state: AppState, mode: Mode = .live, taskStatus: TaskStatusMonitor? = nil) {
+    init(
+        state: AppState,
+        mode: Mode = .live,
+        taskStatus: TaskStatusMonitor? = nil,
+        onCheckMimo: (() -> Void)? = nil
+    ) {
         self.state = state
         self.mode = mode
         self.taskStatus = taskStatus
+        self.onCheckMimo = onCheckMimo
         super.init()
         guard let button = statusItem.button else { return }
         button.title = ""
@@ -134,6 +141,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         addAction("打开 MiMo", #selector(openMimo))
         if mode == .live {
             addAction("刷新", #selector(refresh))
+        } else {
+            addAction("检查 MiMo", #selector(checkMimo))
         }
         menu.addItem(.separator())
         addAction("设置…", #selector(openSettings))
@@ -163,6 +172,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     @objc private func refresh() {
         state.refresh()
+    }
+
+    @objc private func checkMimo() {
+        onCheckMimo?()
     }
 
     @objc private func openMimo() {

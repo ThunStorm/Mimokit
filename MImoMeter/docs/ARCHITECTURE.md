@@ -4,8 +4,8 @@
 Timer / 手动刷新 / 从睡眠唤醒
   → AppState.refreshNow()
   → LocalBridgeClient.probeUsage()     // desktop-api.json + Bearer GET /v1/user/usage
-      payload     → RawUsagePayload
-      unsupported → PlatformUsageClient（主路径）
+      payload 且可归一化出窗口 → RawUsagePayload
+      空/无效 payload、unsupported、401、失败 → PlatformUsageClient（主路径）
                      → CredentialSource（只读 cookies SQLite）
                      → XiaomiSSOClient（phase1 + clientSign + phase2）
                      → GET {apiBase}/user/usage
@@ -36,11 +36,17 @@ Timer / 手动刷新 / 从睡眠唤醒
 
 ```text
 应用启动
+  → reconcilePresence()（按进程表对齐）
   → 若 MiMo 已在运行 → startMeter()
   → 否则 idle 壳（--%，等待 MiMo）
-MiMo launch 通知 → startMeter()
-MiMo terminate 通知 → stopMeter() → idle 壳
+MiMo launch 通知 → afterLaunch（已在跑则 refresh，否则 start）
+MiMo terminate 通知 → 等待 0.6s 再 reconcile
+  → MiMo 仍在跑（更新换代）→ 保持/刷新 meter
+  → 确实退出 → stopMeter() → idle 壳
+每 30s reconcilePresence() 自愈错过的启停通知
 ```
+
+决策纯函数在 `MeterLifecycle`。更新时新旧进程交叠是已知坑：绝不能只凭 terminate 就拆 meter。
 
 ## 轮询
 

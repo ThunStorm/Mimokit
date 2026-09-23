@@ -33,9 +33,12 @@ open ~/Applications/MImoMeter.app
 | --- | --- |
 | MiMo 打开 | 自动读取并显示周额度 |
 | MiMo 退出 | 状态栏变为等待态（`--%`） |
+| MiMo 升级/重启 | 自动恢复显示，不需手动重启 MImoMeter |
 | 开启提示线 | 数字下方色条反映项目任务状态 |
 
 可选设置：周期前缀（如 `W 97%`）、1–9% 红字、展示提示线、刷新间隔、API Base。
+
+> **v1.2.2**：修复 MiMo 新版本更新后菜单栏一直 `--%` 的问题。原地更新时新旧进程交叠，旧逻辑把 terminate 当成「MiMo 已退出」而拆掉 meter。现在按真实进程表对齐，并每 30s 自愈；idle 菜单也有「检查 MiMo」。若本地桥返回 200 但没有可用额度字段，会回落平台 API，不再卡死。
 
 ## 开发
 
@@ -50,7 +53,7 @@ swift run MImoMeter                     # 启动菜单栏（开发用）
 
 1. **本地桥探测（预留）**  
    `GET http://127.0.0.1:<port>/v1/user/usage`（Bearer）  
-   当前 **404** → 静默回落平台 API。
+   当前 **404**，或 200 但无可用额度字段 → 静默回落平台 API。
 
 2. **平台 API（主路径）**  
    只读本机 MiMo 账号分区 cookies → `sid=mimopc` 两阶段 SSO → `serviceToken`  
@@ -74,6 +77,12 @@ swift run MImoMeter                     # 启动菜单栏（开发用）
 1. 菜单「退出 MImoMeter」
 2. 关闭登录项（系统设置 → 通用 → 登录项）
 3. 删除 `~/Applications/MImoMeter.app`
+
+## 变更摘要（近期）
+
+- **fix: MiMo 更新后取不到额度** — 生命周期 `MeterLifecycle`：terminate 延迟判定 + 30s reconcile + idle「检查 MiMo」
+- **fix: 桥空载荷短路** — 200 无窗口时回落平台 API
+- **test** — 自检增至 78 项（含生命周期决策与桥载荷判定）
 
 ## TODO
 

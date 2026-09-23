@@ -43,3 +43,11 @@
 12. **`desktop-api.json` 的 `api` 兼容数字与字符串**  
     本机为 `{"api":1,...}`，按 String 解码会失败导致桥配置永远不可用。
 
+## 2026-09-23
+
+14. **生命周期按进程表 reconcile，不单信 terminate 通知**  
+    MiMo 原地更新常见「新进程先 launch、旧进程后 terminate」。若 terminate 一到就 `stopMeter`，会把已在跑的新实例打回 idle 且不再拉起（菜单栏永久 `--%`）。决策抽成 `MeterLifecycle` 纯函数：terminate 后延迟 0.6s 再对照 `isMimoRunning`；另有 30s 定时器自愈错过的启停通知。
+
+15. **桥 200 空载荷必须回落平台**  
+    `/v1/user/usage` 若返回 200 但无可用 percent/窗口，不得短路 `applySuccessfulPayload`，应继续走平台 API；否则未来桥加了空路由会再次「取不到额度」。
+

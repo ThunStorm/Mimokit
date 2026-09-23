@@ -129,6 +129,14 @@ final class AppState {
         }
     }
 
+    /// Bridge 200 is only trusted when it normalizes into at least one window.
+    static func isUsableBridgePayload(
+        _ payload: RawUsagePayload,
+        receivedAt: Date = Date()
+    ) -> Bool {
+        !Normalizer.windows(from: payload, receivedAt: receivedAt).isEmpty
+    }
+
     func applySuccessfulPayload(_ payload: RawUsagePayload, receivedAt: Date = Date()) {
         let windows = Normalizer.windows(from: payload, receivedAt: receivedAt)
         quotaWindows = windows
@@ -168,8 +176,12 @@ final class AppState {
         let bridgeResult = await deps.bridge.probeUsage()
         switch bridgeResult {
         case .payload(let payload):
-            applySuccessfulPayload(payload, receivedAt: deps.clock())
-            return
+            // Bridge 200 with no usable window must fall through to platform,
+            // otherwise an empty/malformed bridge body blocks the real source.
+            if Self.isUsableBridgePayload(payload, receivedAt: deps.clock()) {
+                applySuccessfulPayload(payload, receivedAt: deps.clock())
+                return
+            }
         case .unsupported, .unauthorized, .unavailable:
             break // silent fallthrough; bridge errors must not surface in v1
         }

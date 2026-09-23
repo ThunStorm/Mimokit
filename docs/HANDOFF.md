@@ -2,15 +2,15 @@
 
 ## 现在处于什么状态
 
-v1.2.1 提示线对齐修复 + 成功态 10 分钟窗口已实现，打包安装在本机 `~/Applications/MImoMeter.app`（2026-09-14）。
+v1.2.2：修复 MiMo 版本更新后菜单栏卡在 `--%` 的生命周期竞态；桥空载荷会回落平台 API。已打包安装 `~/Applications/MImoMeter.app`（2026-09-23）。
 
 | 门禁 | 结果 |
 | --- | --- |
-| `--run-self-tests` | 66 checks PASSED |
-| `--fetch-once` | 真实周额度 percent 可用 |
+| `--run-self-tests` | 78 checks PASSED |
+| `--fetch-once` | 真实周额度 percent=96 可用 |
 | `--task-status-once` | 实时任务态（如 needsAttention/running）可用 |
 | `Scripts/build-app.sh` | 产出带图标、ad-hoc 签名的 `.app`，并装到 `~/Applications` |
-| 生命周期 | 跟随 MiMo 启停；未运行时 idle 壳显示 `--%` |
+| 生命周期 | 跟随 MiMo 启停；更新换代不拆 meter；30s reconcile 自愈 |
 
 ## 关键路径
 
@@ -31,6 +31,7 @@ v1.2.1 提示线对齐修复 + 成功态 10 分钟窗口已实现，打包安装
 7. `desktop-api.json` 的 `api` 可能是 **数字**（版本）而非 URL，必须用 `FlexibleString` 解析；`baseURL` 回退 `127.0.0.1:port`。
 8. 权限确认时 tool 仍是 `running`，但 **有 `raw`、无 `metadata`**；真正执行才有 `metadata`。SSE `/v1/sessions/{id}/events` 有 `permission` 事件，但连接时不补发历史。
 9. `NSStatusItem` 对 custom subview **不会**随文字变短自动收窄；示数/短线必须按字宽布局，并显式设置 `statusItem.length`。
+10. **MiMo 原地更新会新旧进程交叠**（新进程先 launch，旧进程后 terminate）。绝不能只凭 terminate 就拆 meter；`MeterLifecycle` 延迟 0.6s 后按进程表 reconcile，每 30s 自愈。
 
 ## 提示线任务状态（v1.2.1）
 
@@ -43,7 +44,7 @@ v1.2.1 提示线对齐修复 + 成功态 10 分钟窗口已实现，打包安装
 
 - 通知「额度将尽」
 - SSE 订阅以降低权限态延迟
-- 若桥提供 `/v1/user/usage`，适配器已就位
+- 若桥提供 `/v1/user/usage`，适配器已就位（空/无效 body 会回落平台）
 
 ## 恢复
 

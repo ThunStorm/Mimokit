@@ -177,6 +177,46 @@ enum SelfTests {
             expect(state.display.percentageText == "--%", "stale shows --%")
         }
 
+        runSuite("MeterLifecycle") {
+            expect(MeterLifecycle.afterLaunch(meterActive: false) == .start, "launch starts idle meter")
+            expect(MeterLifecycle.afterLaunch(meterActive: true) == .refresh, "launch refreshes live meter")
+            expect(
+                MeterLifecycle.afterTerminate(mimoStillRunning: true, meterActive: true) == .refresh,
+                "update relaunch keeps meter (refresh)"
+            )
+            expect(
+                MeterLifecycle.afterTerminate(mimoStillRunning: true, meterActive: false) == .start,
+                "update relaunch restarts meter"
+            )
+            expect(
+                MeterLifecycle.afterTerminate(mimoStillRunning: false, meterActive: true) == .stop,
+                "real quit stops meter"
+            )
+            expect(MeterLifecycle.reconcile(mimoRunning: true, meterActive: false) == .start, "reconcile start")
+            expect(MeterLifecycle.reconcile(mimoRunning: false, meterActive: true) == .stop, "reconcile stop")
+            expect(MeterLifecycle.reconcile(mimoRunning: true, meterActive: true) == .none, "reconcile keep")
+            expect(MeterLifecycle.reconcile(mimoRunning: false, meterActive: false) == .none, "reconcile idle")
+        }
+
+        runSuite("Bridge empty falls through") {
+            let empty = RawUsagePayload(
+                remainingPercent: nil, usedPercent: nil, resetDate: nil, resetAtUnix: nil, windows: []
+            )
+            expect(!AppState.isUsableBridgePayload(empty), "empty bridge payload rejected")
+            let missingPercent = RawUsagePayload(
+                remainingPercent: nil,
+                usedPercent: nil,
+                resetDate: "2026-09-17",
+                resetAtUnix: 1,
+                windows: []
+            )
+            expect(!AppState.isUsableBridgePayload(missingPercent), "missing percent rejected")
+            let usable = RawUsagePayload(
+                remainingPercent: 42.4, usedPercent: nil, resetDate: nil, resetAtUnix: nil, windows: []
+            )
+            expect(AppState.isUsableBridgePayload(usable), "percent payload accepted")
+        }
+
         runSuite("TaskStatus") {
             let now = Date(timeIntervalSince1970: 1_700_000_000)
 
