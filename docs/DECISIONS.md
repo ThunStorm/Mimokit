@@ -51,3 +51,6 @@
 15. **桥 200 空载荷必须回落平台**  
     `/v1/user/usage` 若返回 200 但无可用 percent/窗口，不得短路 `applySuccessfulPayload`，应继续走平台 API；否则未来桥加了空路由会再次「取不到额度」。
 
+16. **提示线判红收紧：raw ≠ 权限等待**  
+    `task` 等工具运行态就是 `raw` 无 `metadata`；并行启动时也会短暂 raw-only。旧逻辑把「running 且无 metadata」一律判红，导致频繁误报。现规则：仅 bash/edit/write/read 等 metadata 型 probe 工具，同批无任何 metadata、且 start 超过 3s 仍 raw-only，才算权限等待。`reason ∉ {stop, tool-calls}` 不再一律红：error/aborted/interrupted 才红，length 等为灰。
+

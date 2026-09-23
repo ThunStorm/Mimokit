@@ -254,7 +254,7 @@ enum SelfTests {
                 BridgeMessage(
                     info: .init(role: "assistant", time: .init(completed: nil)),
                     parts: [
-                        .init(type: "tool", reason: nil, state: .init(status: "running", hasMetadata: true))
+                        .init(type: "tool", reason: nil, tool: "bash", state: .init(status: "running", hasMetadata: true))
                     ]
                 )
             ]
@@ -267,20 +267,102 @@ enum SelfTests {
                 BridgeMessage(
                     info: .init(role: "assistant", time: .init(completed: nil)),
                     parts: [
-                        .init(type: "tool", reason: nil, state: .init(status: "running", hasMetadata: false))
+                        .init(
+                            type: "tool",
+                            reason: nil,
+                            tool: "bash",
+                            state: .init(status: "running", hasMetadata: false, hasRaw: true, startMs: 1_000)
+                        )
                     ]
                 )
             ]
             expect(
-                TaskStatusResolver.outcome(fromMessages: permissionMessages) == .needsAttention,
-                "running without metadata (permission wait) → needsAttention"
+                TaskStatusResolver.outcome(fromMessages: permissionMessages, now: Date(timeIntervalSince1970: 10)) == .needsAttention,
+                "bash raw-only past grace (permission wait) → needsAttention"
+            )
+
+            // Parallel tools: sibling already has metadata → startup, not permission.
+            let parallelStartup = [
+                BridgeMessage(
+                    info: .init(role: "assistant", time: .init(completed: nil)),
+                    parts: [
+                        .init(
+                            type: "tool",
+                            reason: nil,
+                            tool: "bash",
+                            state: .init(status: "running", hasMetadata: true, hasRaw: false, startMs: 1_000)
+                        ),
+                        .init(
+                            type: "tool",
+                            reason: nil,
+                            tool: "task",
+                            state: .init(status: "running", hasMetadata: false, hasRaw: true, startMs: 1_002)
+                        ),
+                    ]
+                )
+            ]
+            expect(
+                TaskStatusResolver.outcome(fromMessages: parallelStartup, now: Date(timeIntervalSince1970: 10)) == .running,
+                "parallel raw-only sibling is running, not red"
+            )
+
+            // task tool raw-only alone is a normal running payload, not permission.
+            let taskRawOnly = [
+                BridgeMessage(
+                    info: .init(role: "assistant", time: .init(completed: nil)),
+                    parts: [
+                        .init(
+                            type: "tool",
+                            reason: nil,
+                            tool: "task",
+                            state: .init(status: "running", hasMetadata: false, hasRaw: true, startMs: 1_000)
+                        )
+                    ]
+                )
+            ]
+            expect(
+                TaskStatusResolver.outcome(fromMessages: taskRawOnly, now: Date(timeIntervalSince1970: 10)) == .running,
+                "task raw-only is running, not permission"
+            )
+
+            // Fresh raw-only probe inside grace window is still launching.
+            let freshProbe = [
+                BridgeMessage(
+                    info: .init(role: "assistant", time: .init(completed: nil)),
+                    parts: [
+                        .init(
+                            type: "tool",
+                            reason: nil,
+                            tool: "bash",
+                            state: .init(status: "running", hasMetadata: false, hasRaw: true, startMs: 10_000)
+                        )
+                    ]
+                )
+            ]
+            expect(
+                TaskStatusResolver.outcome(fromMessages: freshProbe, now: Date(timeIntervalSince1970: 10.5)) == .running,
+                "fresh bash raw-only within grace → running"
+            )
+
+            let lengthEnd = [
+                BridgeMessage(
+                    info: .init(role: "assistant", time: .init(completed: 2_000)),
+                    parts: [
+                        .init(type: "tool", reason: nil, tool: "bash", state: .init(status: "completed", hasMetadata: true)),
+                        .init(type: "step-finish", reason: "length", state: nil),
+                    ]
+                )
+            ]
+            expect(
+                TaskStatusResolver.outcome(fromMessages: lengthEnd) == .unknown,
+                "length ending is gray, not red"
             )
 
             let successMessages = [
                 BridgeMessage(
                     info: .init(role: "assistant", time: .init(completed: 1_700_000_000_000)),
                     parts: [
-                        .init(type: "tool", reason: nil, state: .init(status: "completed")),
+                        .init(type: "tool", reason: nil, tool: "bash", state: .init(status: "completed", hasMetadata: true)),
                         .init(type: "step-finish", reason: "stop", state: nil),
                     ]
                 )
@@ -294,7 +376,7 @@ enum SelfTests {
                 BridgeMessage(
                     info: .init(role: "assistant", time: .init(completed: nil)),
                     parts: [
-                        .init(type: "tool", reason: nil, state: .init(status: "pending"))
+                        .init(type: "tool", reason: nil, tool: "bash", state: .init(status: "pending"))
                     ]
                 )
             ]
@@ -307,7 +389,7 @@ enum SelfTests {
                 BridgeMessage(
                     info: .init(role: "assistant", time: .init(completed: 2_000)),
                     parts: [
-                        .init(type: "tool", reason: nil, state: .init(status: "error")),
+                        .init(type: "tool", reason: nil, tool: "bash", state: .init(status: "error", hasMetadata: true)),
                         .init(type: "step-finish", reason: "aborted", state: nil),
                     ]
                 )

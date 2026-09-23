@@ -122,11 +122,14 @@ Authorization: Bearer {token}
 | 信号 | 映射 |
 | --- | --- |
 | tool `state.status == pending` | 需要处理（红） |
+| 权限等待：bash/edit/write/read 等 probe 工具 `running` + 有 `raw` 无 `metadata`，且**同批无任何 metadata**，且 start 已超过 3s | 需要处理（红） |
 | assistant 且 `time.completed` 空，或存在 running tool / `step-finish reason=tool-calls` | 运行中（黄） |
 | assistant 完成且 `step-finish reason=stop`，完成时间 ≤ 10min | 最近完成（绿） |
-| 完成但 reason 非 stop 且含 error tool | 需要处理（红） |
+| 完成且含 error tool，或 reason ∈ {aborted, error, interrupted} | 需要处理（红） |
 | 桥不可达 / 无相关 session | 空闲（橙） |
-| 无法解析 / 未知 reason | 状态未知（灰） |
+| 无法解析 / 其它终止 reason（如 length） | 状态未知（灰） |
+
+**误报坑（2026-09-23）**：并行工具启动时，有的已带 `metadata`、有的只有 `raw`；`task` 等工具本身就用 `raw` 作载荷。这些**不是**权限等待，应算运行中。只有 metadata 型工具在无任何执行迹象时卡住 raw-only 才是红。
 
 多 session 优先级：红 > 黄 > 绿 > 灰 > 橙。轮询 15s，仅本地桥。
 

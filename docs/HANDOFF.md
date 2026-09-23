@@ -2,13 +2,13 @@
 
 ## 现在处于什么状态
 
-v1.2.2：修复 MiMo 版本更新后菜单栏卡在 `--%` 的生命周期竞态；桥空载荷会回落平台 API。已打包安装 `~/Applications/MImoMeter.app`（2026-09-23）。
+v1.2.3：修复提示线标红误报（并行工具 / `task` 的 raw 载荷被当成权限等待）。此前 v1.2.2 已修 MiMo 更新后卡 `--%` 的生命周期竞态。已打包安装 `~/Applications/MImoMeter.app`（2026-09-23）。
 
 | 门禁 | 结果 |
 | --- | --- |
-| `--run-self-tests` | 78 checks PASSED |
-| `--fetch-once` | 真实周额度 percent=96 可用 |
-| `--task-status-once` | 实时任务态（如 needsAttention/running）可用 |
+| `--run-self-tests` | 82 checks PASSED |
+| `--fetch-once` | 真实周额度 percent 可用 |
+| `--task-status-once` | 运行中为黄；权限/失败才红（不再把 task raw 误判红） |
 | `Scripts/build-app.sh` | 产出带图标、ad-hoc 签名的 `.app`，并装到 `~/Applications` |
 | 生命周期 | 跟随 MiMo 启停；更新换代不拆 meter；30s reconcile 自愈 |
 
@@ -29,14 +29,16 @@ v1.2.2：修复 MiMo 版本更新后菜单栏卡在 `--%` 的生命周期竞态�
 5. 本机无 XCTest；用 `--run-self-tests`。
 6. `SMAppService` 需要真正的 `.app` + 稳定路径（`~/Applications`）。
 7. `desktop-api.json` 的 `api` 可能是 **数字**（版本）而非 URL，必须用 `FlexibleString` 解析；`baseURL` 回退 `127.0.0.1:port`。
-8. 权限确认时 tool 仍是 `running`，但 **有 `raw`、无 `metadata`**；真正执行才有 `metadata`。SSE `/v1/sessions/{id}/events` 有 `permission` 事件，但连接时不补发历史。
+8. 权限确认时 probe 工具（bash/edit/write/read）可能 `running` + `raw` 无 `metadata`；真正执行才有 `metadata`。**不要**据此一刀切判红——见第 11 条。SSE 有 `permission` 事件但不补发历史。
 9. `NSStatusItem` 对 custom subview **不会**随文字变短自动收窄；示数/短线必须按字宽布局，并显式设置 `statusItem.length`。
 10. **MiMo 原地更新会新旧进程交叠**（新进程先 launch，旧进程后 terminate）。绝不能只凭 terminate 就拆 meter；`MeterLifecycle` 延迟 0.6s 后按进程表 reconcile，每 30s 自愈。
+11. **`raw` 无 `metadata` ≠ 权限等待**。`task` 等工具运行态就是 raw；并行启动也会短暂 raw-only。只有 bash/edit/write/read 等 probe 工具，同批无 metadata 且 start>3s，才判红。见 DECISIONS #16。
 
-## 提示线任务状态（v1.2.1）
+## 提示线任务状态（v1.2.3）
 
 - 设置勾选「展示提示线」后生效；15s 轮询本地桥 sessions/messages
 - 颜色：黄=运行中，绿=**10min** 内成功，红=需要处理（权限/失败），灰=未知，橙=空闲
+- 判红收紧：pending、真权限等待（probe 工具 raw-only>3s 且同批无 metadata）、error/aborted/interrupted；**不再**把并行启动的 raw sibling 或 `task` raw 判红
 - 多会话优先级：红 > 黄 > 绿 > 灰 > 橙
 - 短线与示数等宽居中；`100%`→`99%` 等位数变化时保持对齐
 

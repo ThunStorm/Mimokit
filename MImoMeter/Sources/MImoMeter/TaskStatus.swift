@@ -68,7 +68,36 @@ enum TaskStatusResolver {
         return .idle
     }
 
-    static func outcome(fromMessages messages: [BridgeMessage]) -> SessionTaskOutcome {
+    /// Tools that normally carry `metadata` while executing. A `raw`-only
+    /// running state on these is a permission stall; on other tools (task,
+    /// actor, …) `raw` is just the ordinary payload and is NOT attention.
+    static let permissionProbeTools: Set<String> = [
+        "bash", "edit", "write", "read", "multiedit", "notebookedit",
+    ]
+
+    /// Startup grace: raw-only probes younger than this are launching, not stalled.
+    static let permissionGraceMs: Double = 3_000
+
+    static func isPermissionWait(
+        toolName: String?,
+        state: BridgeMessage.Part.ToolState?,
+        now: Date = Date()
+    ) -> Bool {
+        guard let state,
+              state.status == "running",
+              state.hasRaw,
+              !state.hasMetadata
+        else { return false }
+        let name = (toolName ?? "").lowercased()
+        guard permissionProbeTools.contains(name) else { return false }
+        if let startMs = state.startMs {
+            let ageMs = now.timeIntervalSince1970 * 1000 - Double(startMs)
+            if ageMs < permissionGraceMs { return false }
+        }
+        return true
+    }
+
+    static func outcome(fromMessages messages: [BridgeMessage], now: Date = Date()) -> SessionTaskOutcome {
         guard let last = messages.last else { return .idle }
         let info = last.info
         let parts = last.parts ?? []
@@ -77,8 +106,16 @@ enum TaskStatusResolver {
         if tools.contains(where: { $0.state?.status == "pending" }) {
             return .needsAttention
         }
-        // Permission dialog: tool stays "running" with no metadata.
-        if tools.contains(where: { $0.state?.status == "running" && $0.state?.hasMetadata == false }) {
+
+        // Permission stall only when nothing has started executing and a
+        // metadata-capable probe tool has sat raw-only past the grace window.
+        // Parallel tools often show raw-only while a sibling already has
+        // metadata — that is startup, not a permission dialog.
+        let hasMetadataTool = tools.contains { $0.state?.hasMetadata == true }
+        if !hasMetadataTool,
+           tools.contains(where: {
+               isPermissionWait(toolName: $0.tool, state: $0.state, now: now)
+           }) {
             return .needsAttention
         }
 
@@ -105,7 +142,12 @@ enum TaskStatusResolver {
             if reason == "stop" {
                 return .success(at: completedAt)
             }
-            if hasErrorTool || reason != nil {
+            if hasErrorTool {
+                return .needsAttention
+            }
+            // Only explicit failure-ish endings are red; length/content-filter
+            // and other terminal reasons are gray, not "需要处理".
+            if let reason, ["aborted", "error", "interrupted"].contains(reason) {
                 return .needsAttention
             }
             return .unknown
@@ -147,26 +189,52 @@ struct BridgeMessage: Decodable, Sendable, Equatable {
     struct Part: Decodable, Sendable, Equatable {
         let type: String?
         let reason: String?
+        let tool: String?
         let state: ToolState?
+
+        init(
+            type: String? = nil,
+            reason: String? = nil,
+            tool: String? = nil,
+            state: ToolState? = nil
+        ) {
+            self.type = type
+            self.reason = reason
+            self.tool = tool
+            self.state = state
+        }
 
         struct ToolState: Decodable, Sendable, Equatable {
             let status: String?
             let hasMetadata: Bool
+            let hasRaw: Bool
+            let startMs: Int?
 
             enum CodingKeys: String, CodingKey {
                 case status
                 case metadata
+                case raw
+                case time
             }
 
-            init(status: String? = nil, hasMetadata: Bool = false) {
+            struct TimeBox: Decodable, Sendable, Equatable {
+                let start: Int?
+                let end: Int?
+            }
+
+            init(status: String? = nil, hasMetadata: Bool = false, hasRaw: Bool = false, startMs: Int? = nil) {
                 self.status = status
                 self.hasMetadata = hasMetadata
+                self.hasRaw = hasRaw
+                self.startMs = startMs
             }
 
             init(from decoder: Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
                 status = try container.decodeIfPresent(String.self, forKey: .status)
                 hasMetadata = container.contains(.metadata)
+                hasRaw = container.contains(.raw)
+                startMs = try container.decodeIfPresent(TimeBox.self, forKey: .time)?.start
             }
         }
     }
@@ -231,7 +299,7 @@ struct TaskStatusClient: Sendable {
                 )
                 switch messagesResult {
                 case .success(let messages):
-                    outcomes.append(TaskStatusResolver.outcome(fromMessages: messages))
+                    outcomes.append(TaskStatusResolver.outcome(fromMessages: messages, now: now))
                 case .failure:
                     outcomes.append(.unknown)
                 }
