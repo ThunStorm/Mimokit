@@ -372,17 +372,64 @@ enum SelfTests {
                 "stop → success"
             )
 
+            // pending is the launch window before running — not a permission dialog.
             let pendingMessages = [
                 BridgeMessage(
                     info: .init(role: "assistant", time: .init(completed: nil)),
                     parts: [
-                        .init(type: "tool", reason: nil, tool: "bash", state: .init(status: "pending"))
+                        .init(type: "tool", reason: nil, tool: "bash", state: .init(status: "pending")),
+                        .init(type: "tool", reason: nil, tool: "bash", state: .init(status: "pending")),
                     ]
                 )
             ]
             expect(
-                TaskStatusResolver.outcome(fromMessages: pendingMessages) == .needsAttention,
-                "pending tool → needsAttention"
+                TaskStatusResolver.outcome(fromMessages: pendingMessages) == .running,
+                "pending launch tools → running, not red"
+            )
+
+            let pendingWithRunningSibling = [
+                BridgeMessage(
+                    info: .init(role: "assistant", time: .init(completed: nil)),
+                    parts: [
+                        .init(type: "tool", reason: nil, tool: "bash", state: .init(status: "running", hasMetadata: true)),
+                        .init(type: "tool", reason: nil, tool: "bash", state: .init(status: "pending")),
+                    ]
+                )
+            ]
+            expect(
+                TaskStatusResolver.outcome(fromMessages: pendingWithRunningSibling) == .running,
+                "pending sibling of running tool → running"
+            )
+
+            // step-finish may be followed by a trailing patch; reason must still apply.
+            let toolCallsWithPatch = [
+                BridgeMessage(
+                    info: .init(role: "assistant", time: .init(completed: 2_000)),
+                    parts: [
+                        .init(type: "tool", reason: nil, tool: "write", state: .init(status: "error", hasMetadata: true)),
+                        .init(type: "step-finish", reason: "tool-calls", state: nil),
+                        .init(type: "patch", reason: nil, state: nil),
+                    ]
+                )
+            ]
+            expect(
+                TaskStatusResolver.outcome(fromMessages: toolCallsWithPatch) == .running,
+                "error tools + tool-calls + trailing patch → running"
+            )
+
+            let stopWithPatch = [
+                BridgeMessage(
+                    info: .init(role: "assistant", time: .init(completed: 1_700_000_000_000)),
+                    parts: [
+                        .init(type: "tool", reason: nil, tool: "bash", state: .init(status: "error", hasMetadata: true)),
+                        .init(type: "step-finish", reason: "stop", state: nil),
+                        .init(type: "patch", reason: nil, state: nil),
+                    ]
+                )
+            ]
+            expect(
+                TaskStatusResolver.outcome(fromMessages: stopWithPatch) == .success(at: now),
+                "stop + trailing patch is success even with recoverable error tool"
             )
 
             let errorAbortMessages = [
@@ -395,8 +442,98 @@ enum SelfTests {
                 )
             ]
             expect(
-                TaskStatusResolver.outcome(fromMessages: errorAbortMessages) == .needsAttention,
-                "error+abort → needsAttention"
+                TaskStatusResolver.outcome(fromMessages: errorAbortMessages) == .unknown,
+                "error+abort is gray, not waiting-for-user red"
+            )
+
+            // Open question UI: ball in the user's court → 待确认.
+            let openQuestion = [
+                BridgeMessage(
+                    info: .init(role: "assistant", time: .init(completed: nil)),
+                    parts: [
+                        .init(
+                            type: "tool",
+                            reason: nil,
+                            tool: "question",
+                            state: .init(status: "running", hasMetadata: true, hasOutput: false, startMs: 1_000)
+                        )
+                    ]
+                )
+            ]
+            expect(
+                TaskStatusResolver.outcome(fromMessages: openQuestion, now: Date(timeIntervalSince1970: 10)) == .needsAttention,
+                "open question → needsAttention"
+            )
+
+            let answeredQuestion = [
+                BridgeMessage(
+                    info: .init(role: "assistant", time: .init(completed: 20_000)),
+                    parts: [
+                        .init(
+                            type: "tool",
+                            reason: nil,
+                            tool: "question",
+                            state: .init(status: "completed", hasMetadata: true, hasOutput: true, startMs: 1_000)
+                        ),
+                        .init(type: "step-finish", reason: "stop", state: nil),
+                    ]
+                )
+            ]
+            expect(
+                TaskStatusResolver.outcome(fromMessages: answeredQuestion) == .success(at: Date(timeIntervalSince1970: 20)),
+                "answered question + stop → success"
+            )
+
+            let openPlanExit = [
+                BridgeMessage(
+                    info: .init(role: "assistant", mode: "plan", time: .init(completed: nil)),
+                    parts: [
+                        .init(
+                            type: "tool",
+                            reason: nil,
+                            tool: "plan_exit",
+                            state: .init(status: "running", hasMetadata: true, hasOutput: false, startMs: 1_000)
+                        )
+                    ]
+                )
+            ]
+            expect(
+                TaskStatusResolver.outcome(fromMessages: openPlanExit, now: Date(timeIntervalSince1970: 10)) == .needsAttention,
+                "open plan_exit → needsAttention"
+            )
+
+            // Plan mode finished speaking, no plan_exit yet → waiting for direction.
+            let planAwaitingDirection = [
+                BridgeMessage(
+                    info: .init(role: "assistant", mode: "plan", time: .init(completed: 2_000)),
+                    parts: [
+                        .init(type: "text", reason: nil, state: nil),
+                        .init(type: "step-finish", reason: "stop", state: nil),
+                    ]
+                )
+            ]
+            expect(
+                TaskStatusResolver.outcome(fromMessages: planAwaitingDirection) == .needsAttention,
+                "plan stop without plan_exit → needsAttention"
+            )
+
+            let planApproved = [
+                BridgeMessage(
+                    info: .init(role: "assistant", mode: "plan", time: .init(completed: 2_000)),
+                    parts: [
+                        .init(
+                            type: "tool",
+                            reason: nil,
+                            tool: "plan_exit",
+                            state: .init(status: "completed", hasMetadata: true, hasOutput: true)
+                        ),
+                        .init(type: "step-finish", reason: "stop", state: nil),
+                    ]
+                )
+            ]
+            expect(
+                TaskStatusResolver.outcome(fromMessages: planApproved) == .success(at: Date(timeIntervalSince1970: 2)),
+                "plan_exit answered + stop → success"
             )
 
             let userLast = [

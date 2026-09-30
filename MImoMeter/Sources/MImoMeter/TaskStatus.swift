@@ -13,7 +13,7 @@ enum UnderlineTaskStatus: String, Sendable, Equatable {
         case .idle: return "空闲"
         case .running: return "运行中"
         case .recentSuccess: return "最近完成"
-        case .needsAttention: return "需要处理"
+        case .needsAttention: return "待确认"
         case .unknown: return "状态未知"
         }
     }
@@ -37,7 +37,7 @@ enum TaskStatusResolver {
         return now.timeIntervalSince(updated) <= sessionLookback
     }
 
-    /// needsAttention > running > recentSuccess > unknown > idle
+    /// needsAttention (waiting for user) > running > recentSuccess > unknown > idle
     static func resolve(outcomes: [SessionTaskOutcome], now: Date) -> UnderlineTaskStatus {
         guard !outcomes.isEmpty else { return .idle }
 
@@ -75,7 +75,13 @@ enum TaskStatusResolver {
         "bash", "edit", "write", "read", "multiedit", "notebookedit",
     ]
 
-    /// Startup grace: raw-only probes younger than this are launching, not stalled.
+    /// Interactive tools that block on a user answer / approval UI.
+    /// While open (no output yet) they mean「待确认」, not ordinary running.
+    static let confirmationTools: Set<String> = [
+        "question", "plan_exit",
+    ]
+
+    /// Startup grace: raw-only probes / freshly opened asks are launching, not stalled.
     static let permissionGraceMs: Double = 3_000
 
     static func isPermissionWait(
@@ -97,14 +103,43 @@ enum TaskStatusResolver {
         return true
     }
 
+    /// `question` / `plan_exit` still open: the ball is in the user's court.
+    static func isConfirmationWait(
+        toolName: String?,
+        state: BridgeMessage.Part.ToolState?,
+        now: Date = Date()
+    ) -> Bool {
+        guard let state else { return false }
+        let name = (toolName ?? "").lowercased()
+        guard confirmationTools.contains(name) else { return false }
+        guard state.status == "pending" || state.status == "running" else { return false }
+        // Answered / approved tools carry `output`.
+        if state.hasOutput { return false }
+        if let startMs = state.startMs {
+            let ageMs = now.timeIntervalSince1970 * 1000 - Double(startMs)
+            if ageMs < permissionGraceMs { return false }
+        }
+        return true
+    }
+
     static func outcome(fromMessages messages: [BridgeMessage], now: Date = Date()) -> SessionTaskOutcome {
         guard let last = messages.last else { return .idle }
         let info = last.info
         let parts = last.parts ?? []
         let tools = parts.filter { $0.type == "tool" }
 
-        if tools.contains(where: { $0.state?.status == "pending" }) {
-            return .needsAttention
+        // `step-finish` is not always the last part — a trailing `patch` can follow it.
+        let reason = parts.last(where: { $0.type == "step-finish" })?.reason
+
+        // `pending` is the brief launch window before tools become `running`.
+        // It is NOT a permission dialog and must not flash red during normal work.
+        let hasPendingTool = tools.contains { $0.state?.status == "pending" }
+        let hasRunningTool = tools.contains { $0.state?.status == "running" }
+        let hasOpenConfirmation = tools.contains {
+            isConfirmationWait(toolName: $0.tool, state: $0.state, now: now)
+        }
+        let hasPlanExitAnswered = tools.contains {
+            ($0.tool ?? "").lowercased() == "plan_exit" && $0.state?.hasOutput == true
         }
 
         // Permission stall only when nothing has started executing and a
@@ -119,9 +154,14 @@ enum TaskStatusResolver {
             return .needsAttention
         }
 
+        // Open question / plan_exit UI is an explicit「等你确认」.
+        if hasOpenConfirmation {
+            return .needsAttention
+        }
+
         let completedMs = info?.time?.completed
-        let hasRunningTool = tools.contains { $0.state?.status == "running" }
         let role = info?.role
+        let mode = info?.mode ?? info?.systemMode
 
         if role == "assistant", completedMs == nil {
             return .running
@@ -132,24 +172,25 @@ enum TaskStatusResolver {
 
         if role == "assistant", let completedMs {
             let completedAt = Date(timeIntervalSince1970: Double(completedMs) / 1000)
-            let lastPart = parts.last
-            let reason = lastPart?.type == "step-finish" ? lastPart?.reason : nil
-            let hasErrorTool = tools.contains { $0.state?.status == "error" }
 
-            if hasRunningTool || reason == "tool-calls" {
+            // Pending/running siblings and `tool-calls` mean the turn continues.
+            if hasRunningTool || hasPendingTool || reason == "tool-calls" {
                 return .running
             }
             if reason == "stop" {
+                // Plan mode with no plan_exit yet: finished talking, waiting
+                // for the user to confirm direction.
+                if mode == "plan", !hasPlanExitAnswered {
+                    return .needsAttention
+                }
                 return .success(at: completedAt)
             }
-            if hasErrorTool {
+            // Plan turn ended without a clear verdict — still needs the user.
+            if mode == "plan", !hasPlanExitAnswered {
                 return .needsAttention
             }
-            // Only explicit failure-ish endings are red; length/content-filter
-            // and other terminal reasons are gray, not "需要处理".
-            if let reason, ["aborted", "error", "interrupted"].contains(reason) {
-                return .needsAttention
-            }
+            // Failures / length / aborts do NOT need a click to proceed;
+            // they are gray, not「待确认」.
             return .unknown
         }
 
@@ -179,10 +220,24 @@ struct BridgeMessage: Decodable, Sendable, Equatable {
 
     struct Info: Decodable, Sendable, Equatable {
         let role: String?
+        let mode: String?
+        let systemMode: String?
         let time: Time?
 
         struct Time: Decodable, Sendable, Equatable {
             let completed: Int?
+        }
+
+        init(
+            role: String? = nil,
+            mode: String? = nil,
+            systemMode: String? = nil,
+            time: Time? = nil
+        ) {
+            self.role = role
+            self.mode = mode
+            self.systemMode = systemMode
+            self.time = time
         }
     }
 
@@ -208,12 +263,14 @@ struct BridgeMessage: Decodable, Sendable, Equatable {
             let status: String?
             let hasMetadata: Bool
             let hasRaw: Bool
+            let hasOutput: Bool
             let startMs: Int?
 
             enum CodingKeys: String, CodingKey {
                 case status
                 case metadata
                 case raw
+                case output
                 case time
             }
 
@@ -222,10 +279,17 @@ struct BridgeMessage: Decodable, Sendable, Equatable {
                 let end: Int?
             }
 
-            init(status: String? = nil, hasMetadata: Bool = false, hasRaw: Bool = false, startMs: Int? = nil) {
+            init(
+                status: String? = nil,
+                hasMetadata: Bool = false,
+                hasRaw: Bool = false,
+                hasOutput: Bool = false,
+                startMs: Int? = nil
+            ) {
                 self.status = status
                 self.hasMetadata = hasMetadata
                 self.hasRaw = hasRaw
+                self.hasOutput = hasOutput
                 self.startMs = startMs
             }
 
@@ -234,6 +298,7 @@ struct BridgeMessage: Decodable, Sendable, Equatable {
                 status = try container.decodeIfPresent(String.self, forKey: .status)
                 hasMetadata = container.contains(.metadata)
                 hasRaw = container.contains(.raw)
+                hasOutput = container.contains(.output)
                 startMs = try container.decodeIfPresent(TimeBox.self, forKey: .time)?.start
             }
         }

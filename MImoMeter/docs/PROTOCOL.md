@@ -121,15 +121,19 @@ Authorization: Bearer {token}
 
 | 信号 | 映射 |
 | --- | --- |
-| tool `state.status == pending` | 需要处理（红） |
-| 权限等待：bash/edit/write/read 等 probe 工具 `running` + 有 `raw` 无 `metadata`，且**同批无任何 metadata**，且 start 已超过 3s | 需要处理（红） |
-| assistant 且 `time.completed` 空，或存在 running tool / `step-finish reason=tool-calls` | 运行中（黄） |
-| assistant 完成且 `step-finish reason=stop`，完成时间 ≤ 10min | 最近完成（绿） |
-| 完成且含 error tool，或 reason ∈ {aborted, error, interrupted} | 需要处理（红） |
+| 权限等待：bash/edit/write/read 等 probe 工具 `running` + 有 `raw` 无 `metadata`，且**同批无任何 metadata**，且 start 已超过 3s | 待确认（红） |
+| 开放的 `question` / `plan_exit`（`pending`/`running` 且尚无 `output`，start 超过 3s） | 待确认（红） |
+| plan 模式 assistant 已说完（`reason=stop` 或其它终止）且本条尚无 `plan_exit` 应答 | 待确认（红） |
+| assistant 且 `time.completed` 空，或存在 running/pending tool / `step-finish reason=tool-calls` | 运行中（黄） |
+| assistant 完成且 `step-finish reason=stop`（非 plan 待确认），完成时间 ≤ 10min | 最近完成（绿） |
 | 桥不可达 / 无相关 session | 空闲（橙） |
-| 无法解析 / 其它终止 reason（如 length） | 状态未知（灰） |
+| 失败/中断/length 等终止（无需用户点确认） | 状态未知（灰） |
+
+**红灯语义**：仅表示**卡住等你人工确认**（权限对话框、question 提问、plan 方向确认）。工具 error、aborted 等失败态**不**标红。
 
 **误报坑（2026-09-23）**：并行工具启动时，有的已带 `metadata`、有的只有 `raw`；`task` 等工具本身就用 `raw` 作载荷。这些**不是**权限等待，应算运行中。只有 metadata 型工具在无任何执行迹象时卡住 raw-only 才是红。
+
+**误报坑（2026-09-30）**：(1) tool 启动瞬时 `status=pending` 是排队开跑，不是待用户确认，**不得**判红；(2) `step-finish` 后可能还有 `patch` 尾片，reason 必须从**最后一条** `step-finish` 取，不能只看 `parts.last`；否则 `tool-calls`/`stop` 丢失，可恢复的 error tool 会被误判成需要处理。
 
 多 session 优先级：红 > 黄 > 绿 > 灰 > 橙。轮询 15s，仅本地桥。
 

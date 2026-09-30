@@ -54,3 +54,8 @@
 16. **提示线判红收紧：raw ≠ 权限等待**  
     `task` 等工具运行态就是 `raw` 无 `metadata`；并行启动时也会短暂 raw-only。旧逻辑把「running 且无 metadata」一律判红，导致频繁误报。现规则：仅 bash/edit/write/read 等 metadata 型 probe 工具，同批无任何 metadata、且 start 超过 3s 仍 raw-only，才算权限等待。`reason ∉ {stop, tool-calls}` 不再一律红：error/aborted/interrupted 才红，length 等为灰。
 
+## 2026-09-30
+
+17. **红灯语义 =「待确认」，不是「有失败」**  
+    用户明确：仅在需要人工确认时显红——权限对话框、`question` 提问、`plan_exit` / plan 方向确认。因此：(1) tool 启动瞬时 `pending` 只算运行中；(2) `step-finish` 取最后一条（尾部可能有 `patch`），`tool-calls` 续跑里的可恢复 error 不红；(3) error/aborted/interrupted 等失败态改灰，不红。开放确认 UI（`question`/`plan_exit` 无 `output`）与 plan 模式说完了但无 `plan_exit` 应答才红。文案「需要处理」→「待确认」。
+

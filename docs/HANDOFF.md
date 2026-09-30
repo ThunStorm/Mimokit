@@ -2,13 +2,13 @@
 
 ## 现在处于什么状态
 
-v1.2.3：修复提示线标红误报（并行工具 / `task` 的 raw 载荷被当成权限等待）。此前 v1.2.2 已修 MiMo 更新后卡 `--%` 的生命周期竞态。已打包安装 `~/Applications/MImoMeter.app`（2026-09-23）。
+提示线红灯语义已收紧为**仅「待确认」**（权限对话框 / `question` / `plan_exit` / plan 方向确认）；工具失败、aborted 等不再标红。此前 v1.2.3 修过并行 raw 误判，v1.2.2 修过 MiMo 更新后卡 `--%`。
 
 | 门禁 | 结果 |
 | --- | --- |
-| `--run-self-tests` | 82 checks PASSED |
+| `--run-self-tests` | 90 checks PASSED |
 | `--fetch-once` | 真实周额度 percent 可用 |
-| `--task-status-once` | 运行中为黄；权限/失败才红（不再把 task raw 误判红） |
+| `--task-status-once` | 运行中为黄；仅待确认才红 |
 | `Scripts/build-app.sh` | 产出带图标、ad-hoc 签名的 `.app`，并装到 `~/Applications` |
 | 生命周期 | 跟随 MiMo 启停；更新换代不拆 meter；30s reconcile 自愈 |
 
@@ -32,13 +32,15 @@ v1.2.3：修复提示线标红误报（并行工具 / `task` 的 raw 载荷被�
 8. 权限确认时 probe 工具（bash/edit/write/read）可能 `running` + `raw` 无 `metadata`；真正执行才有 `metadata`。**不要**据此一刀切判红——见第 11 条。SSE 有 `permission` 事件但不补发历史。
 9. `NSStatusItem` 对 custom subview **不会**随文字变短自动收窄；示数/短线必须按字宽布局，并显式设置 `statusItem.length`。
 10. **MiMo 原地更新会新旧进程交叠**（新进程先 launch，旧进程后 terminate）。绝不能只凭 terminate 就拆 meter；`MeterLifecycle` 延迟 0.6s 后按进程表 reconcile，每 30s 自愈。
-11. **`raw` 无 `metadata` ≠ 权限等待**。`task` 等工具运行态就是 raw；并行启动也会短暂 raw-only。只有 bash/edit/write/read 等 probe 工具，同批无 metadata 且 start>3s，才判红。见 DECISIONS #16。
+11. **`raw` 无 `metadata` ≠ 权限等待**。`task` 等工具运行态就是 raw；并行启动也会短暂 raw-only。只有 bash/edit/write/read 等 probe 工具，同批无 metadata 且 start>3s，才算权限等待。见 DECISIONS #16。
+12. **tool 启动瞬时 `status=pending` 不是待确认**，只算排队开跑（黄）。`step-finish` 后可能跟 `patch` 尾片，reason 必须取最后一条 `step-finish`，不能看 `parts.last`。见 DECISIONS #17。
 
-## 提示线任务状态（v1.2.3）
+## 提示线任务状态（当前）
 
 - 设置勾选「展示提示线」后生效；15s 轮询本地桥 sessions/messages
-- 颜色：黄=运行中，绿=**10min** 内成功，红=需要处理（权限/失败），灰=未知，橙=空闲
-- 判红收紧：pending、真权限等待（probe 工具 raw-only>3s 且同批无 metadata）、error/aborted/interrupted；**不再**把并行启动的 raw sibling 或 `task` raw 判红
+- 颜色：黄=运行中，绿=**10min** 内成功，红=**待确认**，灰=未知/失败，橙=空闲
+- **红 = 卡住等人工确认**：权限 probe raw-only>3s、开放的 `question`/`plan_exit`（无 output）、plan 模式已说完且无 `plan_exit` 应答
+- **失败不红**：error tool、aborted/interrupted、length 等一律灰
 - 多会话优先级：红 > 黄 > 绿 > 灰 > 橙
 - 短线与示数等宽居中；`100%`→`99%` 等位数变化时保持对齐
 
